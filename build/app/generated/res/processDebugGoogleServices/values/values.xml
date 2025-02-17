@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gcm_defaultSenderId" translatable="false">1052199028673</string>
+    <string name="google_api_key" translatable="false">AIzaSyCb4GCc8kK0LyvR8r1zfifDzWWx3UDN6tI</string>
+    <string name="google_app_id" translatable="false">1:1052199028673:android:b745a3f9f82b3305301140</string>
+    <string name="google_crash_reporting_api_key" translatable="false">AIzaSyCb4GCc8kK0LyvR8r1zfifDzWWx3UDN6tI</string>
+    <string name="google_storage_bucket" translatable="false">attendance-65fd5.firebasestorage.app</string>
+    <string name="project_id" translatable="false">attendance-65fd5</string>
+</resources>
