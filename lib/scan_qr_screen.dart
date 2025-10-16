@@ -422,6 +422,7 @@ Future<void> loadAttendanceCache() async {
                                   duration: Duration(seconds: 2),
                                 ),
                               );
+                              Navigator.pop(context);
                               return;
                             }
 

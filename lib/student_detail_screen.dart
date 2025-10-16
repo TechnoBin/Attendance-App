@@ -63,185 +63,182 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
     }
   }
 
-  void _showFullScreenQR(
-    BuildContext context,
-    Map<String, dynamic> studentData,
-  ) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final GlobalKey qrKey = GlobalKey();
+  // void _showFullScreenQR(
+  //   BuildContext context,
+  //   Map<String, dynamic> studentData,
+  // ) {
+  //   final theme = Theme.of(context);
+  //   final isDark = theme.brightness == Brightness.dark;
+  //   final GlobalKey qrKey = GlobalKey();
 
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder:
-          (_) => Dialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            backgroundColor: theme.dialogBackgroundColor,
-            child: Stack(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        "QR Code for ${studentData['name'] ?? 'Unknown'}",
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      
-                      
-                      RepaintBoundary(
-                          key: qrKey,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color:
-                                  Colors
-                                      .white, // white background for all, including text
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.grey.shade300),
-                              boxShadow:
-                                  isDark
-                                      ? null
-                                      : [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.05),
-                                          blurRadius: 10,
-                                          offset: const Offset(0, 6),
-                                        ),
-                                      ],
-                            ),
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  studentData['name'] ?? 'Unknown',
-                                  textAlign: TextAlign.center,
-                                  style: theme.textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color:
-                                        Colors.black, // black text on white bg
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    QrImageView(
-                                      data:
-                                          studentData['qrData'] ?? 'No QR Data',
-                                      version: QrVersions.auto,
-                                      size: 200,
-                                      backgroundColor: Colors.white,
-                                      gapless: false,
-                                    ),
-                                    CircleAvatar(
-                                      radius: 20,
-                                      backgroundColor: Colors.white,
-                                      child: OverflowBox(
-                                        maxHeight: 60,
-                                        maxWidth: 60,
-                                        child: ClipOval(
-                                          child: Image.asset(
-                                            'assets/app_logo.png',
-                                            width: 60,
-                                            height: 60,
-                                            fit: BoxFit.cover,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      
-                      const SizedBox(height: 24),
-                      ElevatedButton.icon(
-                        onPressed: () async {
-                          final result = await _downloadQR(
-                            context: context,
-                            key: qrKey,
-                            studentName: studentData['name'] ?? 'Unknown',
-                            className: studentData['class'] ?? 'UnknownClass',
-                          );
-                          if (result.success) {
-                            Navigator.of(context).pop();
+  //   showDialog(
+  //     context: context,
+  //     barrierDismissible: true,
+  //     builder:
+  //         (_) => Dialog(
+  //           shape: RoundedRectangleBorder(
+  //             borderRadius: BorderRadius.circular(16),
+  //           ),
+  //           backgroundColor: theme.dialogBackgroundColor,
+  //           child: Stack(
+  //             children: [
+  //               Padding(
+  //                 padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
+  //                 child: Column(
+  //                   mainAxisSize: MainAxisSize.min,
+  //                   children: [
+  //                     Text(
+  //                       "QR Code for ${studentData['name'] ?? 'Unknown'}",
+  //                       textAlign: TextAlign.center,
+  //                       style: theme.textTheme.titleLarge?.copyWith(
+  //                         fontWeight: FontWeight.bold,
+  //                       ),
+  //                     ),
+  //                     const SizedBox(height: 24),
 
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: GestureDetector(
-                                  onTap: () async {
-                                    final file = File(result.filePath!);
-                                    if (await file.exists()) {
-                                      OpenFile.open(result.filePath!);
-                                    }
-                                  },
-                                  child: Text(
-                                    'QR saved! Tap to open.',
-                                    style: const TextStyle(
-                                      // decoration: TextDecoration.underline,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                                backgroundColor: Colors.green,
-                                duration: const Duration(seconds: 5),
-                              ),
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  result.message ?? 'Failed to save QR',
-                                ),
-                                backgroundColor: Colors.red,
-                                duration: const Duration(seconds: 5),
-                              ),
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.download),
-                        label: const Text("Download QR Code"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: theme.colorScheme.primary,
-                          foregroundColor: theme.colorScheme.onPrimary,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 14,
-                          ),
-                          textStyle: const TextStyle(fontSize: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton(
-                    icon: Icon(Icons.close, color: theme.iconTheme.color),
-                    onPressed: () => Navigator.of(context).pop(),
-                    tooltip: "Close",
-                  ),
-                ),
-              ],
-            ),
-          ),
-    );
-  }
+  //                     RepaintBoundary(
+  //                       key: qrKey,
+  //                       child: Container(
+  //                         decoration: BoxDecoration(
+  //                           color:
+  //                               Colors
+  //                                   .white, // white background for all, including text
+  //                           borderRadius: BorderRadius.circular(16),
+  //                           border: Border.all(color: Colors.grey.shade300),
+  //                           boxShadow:
+  //                               isDark
+  //                                   ? null
+  //                                   : [
+  //                                     BoxShadow(
+  //                                       color: Colors.black.withOpacity(0.05),
+  //                                       blurRadius: 10,
+  //                                       offset: const Offset(0, 6),
+  //                                     ),
+  //                                   ],
+  //                         ),
+  //                         padding: const EdgeInsets.all(16),
+  //                         child: Column(
+  //                           mainAxisSize: MainAxisSize.min,
+  //                           children: [
+  //                             Text(
+  //                               studentData['name'] ?? 'Unknown',
+  //                               textAlign: TextAlign.center,
+  //                               style: theme.textTheme.titleLarge?.copyWith(
+  //                                 fontWeight: FontWeight.bold,
+  //                                 color: Colors.black, // black text on white bg
+  //                               ),
+  //                             ),
+  //                             const SizedBox(height: 12),
+  //                             Stack(
+  //                               alignment: Alignment.center,
+  //                               children: [
+  //                                 QrImageView(
+  //                                   data: studentData['qrData'] ?? 'No QR Data',
+  //                                   version: QrVersions.auto,
+  //                                   size: 200,
+  //                                   backgroundColor: Colors.white,
+  //                                   gapless: false,
+  //                                 ),
+  //                                 CircleAvatar(
+  //                                   radius: 20,
+  //                                   backgroundColor: Colors.white,
+  //                                   child: OverflowBox(
+  //                                     maxHeight: 60,
+  //                                     maxWidth: 60,
+  //                                     child: ClipOval(
+  //                                       child: Image.asset(
+  //                                         'assets/app_logo.png',
+  //                                         width: 60,
+  //                                         height: 60,
+  //                                         fit: BoxFit.cover,
+  //                                       ),
+  //                                     ),
+  //                                   ),
+  //                                 ),
+  //                               ],
+  //                             ),
+  //                           ],
+  //                         ),
+  //                       ),
+  //                     ),
+
+  //                     const SizedBox(height: 24),
+  //                     ElevatedButton.icon(
+  //                       onPressed: () async {
+  //                         final result = await _downloadQR(
+  //                           context: context,
+  //                           key: qrKey,
+  //                           studentName: studentData['name'] ?? 'Unknown',
+  //                           className: studentData['class'] ?? 'UnknownClass',
+  //                         );
+  //                         if (result.success) {
+  //                           Navigator.of(context).pop();
+
+  //                           ScaffoldMessenger.of(context).showSnackBar(
+  //                             SnackBar(
+  //                               content: GestureDetector(
+  //                                 onTap: () async {
+  //                                   final file = File(result.filePath!);
+  //                                   if (await file.exists()) {
+  //                                     OpenFile.open(result.filePath!);
+  //                                   }
+  //                                 },
+  //                                 child: Text(
+  //                                   'QR saved! Tap to open.',
+  //                                   style: const TextStyle(
+  //                                     // decoration: TextDecoration.underline,
+  //                                     color: Colors.white,
+  //                                   ),
+  //                                 ),
+  //                               ),
+  //                               backgroundColor: Colors.green,
+  //                               duration: const Duration(seconds: 5),
+  //                             ),
+  //                           );
+  //                         } else {
+  //                           ScaffoldMessenger.of(context).showSnackBar(
+  //                             SnackBar(
+  //                               content: Text(
+  //                                 result.message ?? 'Failed to save QR',
+  //                               ),
+  //                               backgroundColor: Colors.red,
+  //                               duration: const Duration(seconds: 5),
+  //                             ),
+  //                           );
+  //                         }
+  //                       },
+  //                       icon: const Icon(Icons.download),
+  //                       label: const Text("Download QR Code"),
+  //                       style: ElevatedButton.styleFrom(
+  //                         backgroundColor: theme.colorScheme.primary,
+  //                         foregroundColor: theme.colorScheme.onPrimary,
+  //                         padding: const EdgeInsets.symmetric(
+  //                           horizontal: 24,
+  //                           vertical: 14,
+  //                         ),
+  //                         textStyle: const TextStyle(fontSize: 16),
+  //                         shape: RoundedRectangleBorder(
+  //                           borderRadius: BorderRadius.circular(10),
+  //                         ),
+  //                       ),
+  //                     ),
+  //                   ],
+  //                 ),
+  //               ),
+  //               Positioned(
+  //                 top: 8,
+  //                 right: 8,
+  //                 child: IconButton(
+  //                   icon: Icon(Icons.close, color: theme.iconTheme.color),
+  //                   onPressed: () => Navigator.of(context).pop(),
+  //                   tooltip: "Close",
+  //                 ),
+  //               ),
+  //             ],
+  //           ),
+  //         ),
+  //   );
+  // }
 
   Future<DownloadResult> _downloadQR({
     required BuildContext context,
@@ -302,10 +299,14 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
     final theme = Theme.of(context);
     final textColor = theme.textTheme.bodyLarge?.color ?? Colors.black;
     final themeNotifier = Provider.of<ThemeNotifier>(context);
+    final GlobalKey qrKey = GlobalKey();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Student Details",style: TextStyle(fontWeight: FontWeight.bold),),
+        title: const Text(
+          "Student Details",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor:
             themeNotifier.isDarkMode ? Colors.blue.shade900 : Colors.blue,
         actions: [
@@ -339,8 +340,8 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    GestureDetector(
-                      onTap: () => _showFullScreenQR(context, studentData),
+                    RepaintBoundary(
+                      key: qrKey,
                       child: Container(
                         decoration: BoxDecoration(
                           color:
@@ -360,6 +361,15 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                         padding: const EdgeInsets.all(12),
                         child: Column(
                           children: [
+                            Text(
+                              studentData['name'] ?? "Unknown",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.black,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
                             Stack(
                               alignment: Alignment.center,
                               children: [
@@ -381,36 +391,71 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                                         'assets/app_logo.png',
                                         width: 60,
                                         height: 60,
-                                        // fit: BoxFit.cover,
                                       ),
                                     ),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
-                            Text(
-                              "Tap to view and download QR",
-                              style: TextStyle(
-                                fontSize: 14,
-                                color:
-                                    Theme.of(context).brightness ==
-                                            Brightness.dark
-                                        ? Colors.white70
-                                        : Colors.black54,
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
                           ],
                         ),
                       ),
                     ),
-
                     const SizedBox(height: 16),
-
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        final result = await _downloadQR(
+                          context: context,
+                          key: qrKey,
+                          studentName: studentData['name'] ?? 'Unknown',
+                          className: studentData['class'] ?? 'UnknownClass',
+                        );
+                        if (result.success) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: GestureDetector(
+                                onTap: () async {
+                                  final file = File(result.filePath!);
+                                  if (await file.exists()) {
+                                    OpenFile.open(result.filePath!);
+                                  }
+                                },
+                                child: const Text(
+                                  'QR saved! Tap to open.',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ),
+                              backgroundColor: Colors.green,
+                              duration: const Duration(seconds: 5),
+                            ),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                result.message ?? 'Failed to save QR',
+                              ),
+                              backgroundColor: Colors.red,
+                              duration: const Duration(seconds: 5),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.download),
+                      label: const Text("Download QR Code"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     Text(
-                      """Scan this QR code to mark attendance for "${studentData['name']}" """,
-                      style: TextStyle(
+                      'Scan this QR code to mark attendance for "${studentData['name']}"',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontStyle: FontStyle.italic,
                         color: Colors.grey,
