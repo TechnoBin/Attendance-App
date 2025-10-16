@@ -41,15 +41,14 @@ class _StudentListScreenState extends State<StudentListScreen> {
   bool isSearching = false;
   TextEditingController searchController = TextEditingController();
   String searchQuery = "";
+  Set<String> selectedStudentIds = {};
+  bool isSelectionMode = false;
 
   late String firestoreUserId;
-  late StreamSubscription<QuerySnapshot> _studentsSubscription;
-  late StreamSubscription<DocumentSnapshot> _attendanceSubscription;
 
-  List<DocumentSnapshot> _latestStudents = [];
-  List<String> _latestPresentIds = [];
+  Future<void> _fetchStudentsAndAttendance(DateTime date) async {
+    setState(() => isLoading = true);
 
-  void _listenToStudentsAndAttendance() {
     final studentsRef = FirebaseFirestore.instance
         .collection('users')
         .doc(firestoreUserId)
@@ -57,39 +56,71 @@ class _StudentListScreenState extends State<StudentListScreen> {
         .doc(widget.classId)
         .collection('students');
 
+    final attendanceDocId = DateFormat('yyyy-MM-dd').format(date);
     final attendanceRef = FirebaseFirestore.instance
         .collection('users')
         .doc(firestoreUserId)
         .collection('classes')
         .doc(widget.classId)
         .collection('attendance')
-        .doc(DateFormat('yyyy-MM-dd').format(selectedDate));
+        .doc(attendanceDocId);
 
-    _studentsSubscription = studentsRef.snapshots().listen((studentsSnapshot) {
-      _latestStudents = studentsSnapshot.docs;
-      _combineAndSetState();
-    });
+    try {
+      // Try to fetch from cache first
+      final studentsSnapshot = await studentsRef.get(
+        GetOptions(source: Source.cache),
+      );
+      final attendanceSnapshot = await attendanceRef.get(
+        GetOptions(source: Source.cache),
+      );
 
-    _attendanceSubscription = attendanceRef.snapshots().listen((
-      attendanceSnapshot,
-    ) {
-      if (attendanceSnapshot.exists && attendanceSnapshot.data() != null) {
-        _latestPresentIds = List<String>.from(
-          attendanceSnapshot['present'] ?? [],
-        );
-      } else {
-        _latestPresentIds = [];
+      if (studentsSnapshot.docs.isEmpty) {
+        throw Exception('No cache found');
       }
-      _combineAndSetState();
-    });
+
+      // process and show data from cache
+      _processStudentsAndAttendance(studentsSnapshot, attendanceSnapshot, date);
+    } catch (e) {
+      // Cache fetch failed, fallback to server fetch
+      try {
+        final studentsSnapshot = await studentsRef.get(
+          GetOptions(source: Source.server),
+        );
+        final attendanceSnapshot = await attendanceRef.get(
+          GetOptions(source: Source.server),
+        );
+
+        // process and show data from server
+        _processStudentsAndAttendance(
+          studentsSnapshot,
+          attendanceSnapshot,
+          date,
+        );
+      } catch (serverError) {
+        // Handle error if server fetch fails too
+        setState(() => isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error fetching data: $serverError")),
+        );
+      }
+    }
   }
 
-  void _combineAndSetState() {
+  void _processStudentsAndAttendance(
+    QuerySnapshot studentsSnapshot,
+    DocumentSnapshot attendanceSnapshot,
+    DateTime date,
+  ) {
+    List<String> presentIds = [];
+    if (attendanceSnapshot.exists && attendanceSnapshot.data() != null) {
+      presentIds = List<String>.from(attendanceSnapshot['present'] ?? []);
+    }
+
     List<DocumentSnapshot> present = [];
     List<DocumentSnapshot> absent = [];
 
-    for (var student in _latestStudents) {
-      if (_latestPresentIds.contains(student.id)) {
+    for (var student in studentsSnapshot.docs) {
+      if (presentIds.contains(student.id)) {
         present.add(student);
       } else {
         absent.add(student);
@@ -97,17 +128,17 @@ class _StudentListScreenState extends State<StudentListScreen> {
     }
 
     setState(() {
-      totalStudents = _latestStudents;
+      totalStudents = studentsSnapshot.docs;
       presentStudents = present;
       absentStudents = absent;
+      selectedDate = date;
       isLoading = false;
     });
   }
 
   @override
   void dispose() {
-    _studentsSubscription.cancel();
-    _attendanceSubscription.cancel();
+    searchController.dispose();
     super.dispose();
   }
 
@@ -116,52 +147,29 @@ class _StudentListScreenState extends State<StudentListScreen> {
     super.initState();
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      // Since context is not ready here, consider showing error later or in build
-      // For now, just print or handle gracefully
       print("User not logged in.");
       return;
     }
     firestoreUserId = user.uid;
-    _listenToStudentsAndAttendance(); // Use real-time listeners instead of _fetchStudents()
+
+    // Fetch data once initially for today's date (or selectedDate)
+    _fetchStudentsAndAttendance(selectedDate);
   }
 
   Future<void> _selectDate(BuildContext context) async {
-    DateTime? pickedDate = await showDatePicker(
+    final pickedDate = await showDatePicker(
       context: context,
       initialDate: selectedDate,
-      firstDate: DateTime(2020),
+      firstDate: DateTime(2000),
       lastDate: DateTime.now(),
     );
 
     if (pickedDate != null && pickedDate != selectedDate) {
       setState(() {
-        selectedDate = pickedDate;
         isLoading = true;
+        selectedDate = pickedDate;
       });
-
-      // Cancel previous attendance listener safely
-      await _attendanceSubscription.cancel();
-
-      final attendanceRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(firestoreUserId)
-          .collection('classes')
-          .doc(widget.classId)
-          .collection('attendance')
-          .doc(DateFormat('yyyy-MM-dd').format(selectedDate));
-
-      _attendanceSubscription = attendanceRef.snapshots().listen((
-        attendanceSnapshot,
-      ) {
-        if (attendanceSnapshot.exists && attendanceSnapshot.data() != null) {
-          _latestPresentIds = List<String>.from(
-            attendanceSnapshot['present'] ?? [],
-          );
-        } else {
-          _latestPresentIds = [];
-        }
-        _combineAndSetState();
-      });
+      await _fetchStudentsAndAttendance(pickedDate);
     }
   }
 
@@ -595,10 +603,35 @@ class _StudentListScreenState extends State<StudentListScreen> {
                         ? Colors.blue.shade900
                         : Colors.blue,
                 iconTheme: IconThemeData(color: iconColor),
+
+                // Conditionally change leading icon when in selection mode
+                leading:
+                    isSelectionMode
+                        ? IconButton(
+                          icon: Icon(Icons.close, color: iconColor),
+                          tooltip: "Cancel selection",
+                          onPressed: () {
+                            setState(() {
+                              isSelectionMode = false;
+                              selectedStudentIds.clear();
+                            });
+                          },
+                        )
+                        : null, // Default back button or none
+                // Conditionally show title or search field or selection count
                 title: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
                   child:
-                      isSearching
+                      isSelectionMode
+                          ? Text(
+                            '${selectedStudentIds.length} selected',
+                            key: const ValueKey('selectionCount'),
+                            style: TextStyle(
+                              // fontWeight: FontWeight.bold,
+                              color: themeNotifier.isDarkMode ?Colors.white : Colors.black,
+                            ),
+                          )
+                          : isSearching
                           ? TextField(
                             key: const ValueKey('search'),
                             controller: searchController,
@@ -621,67 +654,81 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                 ),
-                actions: [
-                  IconButton(
-                    icon: Icon(
-                      isSearching ? Icons.close : Icons.search,
-                      color: iconColor,
-                    ),
-                    tooltip: "Search Students",
-                    onPressed: () {
-                      setState(() {
-                        if (isSearching) {
-                          searchQuery = "";
-                          searchController.clear();
-                        }
-                        isSearching = !isSearching;
-                      });
-                    },
-                  ),
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      switch (value) {
-                        case 'calendar':
-                          _selectDate(context);
-                          break;
-                        case 'download':
-                          _confirmDownload();
-                          break;
-                        case 'markAttendance':
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder:
-                                  (context) => ManualAttendanceScreen(
-                                    classId: widget.classId,
-                                    className: widget.className,
-                                    selectedDate: selectedDate,
-                                  ),
+
+                // Conditionally show actions
+                actions:
+                    isSelectionMode
+                        ? [
+                          IconButton(
+                            icon: Icon(Icons.delete, color: iconColor),
+                            tooltip: "Delete selected students",
+                            onPressed: _confirmMultiDelete,
+                          ),
+                        ]
+                        : [
+                          IconButton(
+                            icon: Icon(
+                              isSearching ? Icons.close : Icons.search,
+                              color: iconColor,
                             ),
-                          );
-                          break;
-                      }
-                    },
-                    itemBuilder:
-                        (BuildContext context) => [
-                          _buildPopupMenuItem(
-                            Icons.calendar_today,
-                            'Select Date',
-                            'calendar',
+                            tooltip: "Search Students",
+                            onPressed: () {
+                              setState(() {
+                                if (isSearching) {
+                                  searchQuery = "";
+                                  searchController.clear();
+                                }
+                                isSearching = !isSearching;
+                              });
+                            },
                           ),
-                          _buildPopupMenuItem(
-                            Icons.download,
-                            'Download Attendance',
-                            'download',
-                          ),
-                          _buildPopupMenuItem(
-                            Icons.edit,
-                            'Mark Attendance Manually',
-                            'markAttendance',
+                          PopupMenuButton<String>(
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'calendar':
+                                  _selectDate(context);
+                                  break;
+                                case 'download':
+                                  _confirmDownload();
+                                  break;
+                                case 'markAttendance':
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder:
+                                          (context) => ManualAttendanceScreen(
+                                            classId: widget.classId,
+                                            className: widget.className,
+                                            selectedDate: selectedDate,
+                                          ),
+                                    ),
+                                  ).then((_) {
+                                    _fetchStudentsAndAttendance(selectedDate);
+                                  });
+                                  break;
+                              }
+                            },
+                            itemBuilder:
+                                (BuildContext context) => [
+                                  _buildPopupMenuItem(
+                                    Icons.calendar_today,
+                                    'Select Date',
+                                    'calendar',
+                                  ),
+                                  _buildPopupMenuItem(
+                                    Icons.download,
+                                    'Download Attendance',
+                                    'download',
+                                  ),
+                                  _buildPopupMenuItem(
+                                    Icons.edit,
+                                    'Mark Attendance Manually',
+                                    'markAttendance',
+                                  ),
+                                ],
                           ),
                         ],
-                  ),
-                ],
+
                 bottom: TabBar(
                   indicatorColor: Colors.white,
                   labelColor: Colors.white,
@@ -720,9 +767,9 @@ class _StudentListScreenState extends State<StudentListScreen> {
                       Expanded(
                         child: TabBarView(
                           children: [
-                            _buildStudentList(totalStudents),
-                            _buildStudentList(presentStudents),
-                            _buildStudentList(absentStudents),
+                            _buildStudentList(totalStudents, themeNotifier.isDarkMode),
+                            _buildStudentList(presentStudents, themeNotifier.isDarkMode),
+                            _buildStudentList(absentStudents, themeNotifier.isDarkMode),
                           ],
                         ),
                       ),
@@ -764,7 +811,9 @@ class _StudentListScreenState extends State<StudentListScreen> {
                       prefilledClassName: widget.className,
                     ),
               ),
-            ).then((_) {});
+            ).then((_) {
+              _fetchStudentsAndAttendance(selectedDate);
+            });
           },
         ),
       ),
@@ -782,7 +831,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
     );
   }
 
-  Widget _buildStudentList(List<DocumentSnapshot> students) {
+  Widget _buildStudentList(List<DocumentSnapshot> students, bool isDarkMode) {
     List<DocumentSnapshot> filtered =
         students.where((student) {
           final data = student.data() as Map<String, dynamic>? ?? {};
@@ -793,35 +842,25 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
     int compareRollNumbers(String r1, String r2) {
       final regex = RegExp(r'^([a-zA-Z]*)(\d+)$');
-
       final match1 = regex.firstMatch(r1);
       final match2 = regex.firstMatch(r2);
 
-      if (match1 == null || match2 == null) {
-        // Fallback: if pattern doesn't match, do string compare
-        return r1.compareTo(r2);
-      }
+      if (match1 == null || match2 == null) return r1.compareTo(r2);
 
       final prefix1 = match1.group(1) ?? '';
       final prefix2 = match2.group(1) ?? '';
-
       final num1 = int.tryParse(match1.group(2) ?? '') ?? 0;
       final num2 = int.tryParse(match2.group(2) ?? '') ?? 0;
 
       final prefixCompare = prefix1.compareTo(prefix2);
-      if (prefixCompare != 0) {
-        return prefixCompare;
-      }
-      return num1.compareTo(num2);
+      return prefixCompare != 0 ? prefixCompare : num1.compareTo(num2);
     }
 
     filtered.sort((a, b) {
       final aData = a.data() as Map<String, dynamic>? ?? {};
       final bData = b.data() as Map<String, dynamic>? ?? {};
-
       final aRoll = (aData['rollNo'] ?? '').toString().toLowerCase();
       final bRoll = (bData['rollNo'] ?? '').toString().toLowerCase();
-
       return compareRollNumbers(aRoll, bRoll);
     });
 
@@ -838,47 +877,71 @@ class _StudentListScreenState extends State<StudentListScreen> {
       padding: const EdgeInsets.only(top: 0),
       itemCount: filtered.length,
       itemBuilder: (context, index) {
-        var studentData = filtered[index].data() as Map<String, dynamic>? ?? {};
-        String studentId = filtered[index].id;
+        final student = filtered[index];
+        final studentData = student.data() as Map<String, dynamic>? ?? {};
+        final studentId = student.id;
+        final isSelected = selectedStudentIds.contains(studentId);
 
-        return Tooltip(
-          message: 'Tap to view details\nLong press to delete',
+        return GestureDetector(
+          onLongPress: () {
+            setState(() {
+              isSelectionMode = true;
+              selectedStudentIds.add(studentId);
+            });
+          },
+          onTap: () {
+            if (isSelectionMode) {
+              setState(() {
+                if (isSelected) {
+                  selectedStudentIds.remove(studentId);
+                  if (selectedStudentIds.isEmpty) {
+                    isSelectionMode = false;
+                  }
+                } else {
+                  selectedStudentIds.add(studentId);
+                }
+              });
+            } else {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder:
+                      (_) => StudentDetailScreen(
+                        studentData: studentData,
+                        firestoreUserId: firestoreUserId,
+                      ),
+                ),
+              ).then((_) => _fetchStudentsAndAttendance(selectedDate));
+            }
+          },
           child: Card(
-            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             elevation: 4,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
+            color: isSelected ? (isDarkMode
+        ? Colors.blue.shade700.withOpacity(0.6)
+        : Colors.blue.shade100)
+    : null,
             child: ListTile(
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 20,
                 vertical: 12,
               ),
-              leading: const CircleAvatar(
+              leading: CircleAvatar(
                 radius: 23,
-                backgroundColor: Colors.blueAccent,
-                child: Icon(Icons.person, color: Colors.white),
+                backgroundColor: isSelected ? Colors.blue : Colors.blueAccent,
+                child:
+                    isSelected
+                        ? const Icon(Icons.check, color: Colors.white)
+                        : const Icon(Icons.person, color: Colors.white),
               ),
               title: Text(
                 studentData['name'] ?? "Unknown",
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Text('Roll No: ${studentData['rollNo']}'),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder:
-                        (context) => StudentDetailScreen(
-                          studentData: studentData,
-                          firestoreUserId: firestoreUserId,
-                        ),
-                  ),
-                );
-              },
-              onLongPress: () {
-                _showDeleteConfirmationDialog(context, studentId);
-              },
             ),
           ),
         );
@@ -886,52 +949,80 @@ class _StudentListScreenState extends State<StudentListScreen> {
     );
   }
 
-  void _showDeleteConfirmationDialog(BuildContext context, String studentId) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text("Delete Student"),
-          content: const Text("Are you sure you want to delete this student?"),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel"),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _deleteStudent(studentId);
-              },
-              child: const Text("Delete"),
-            ),
-          ],
-        );
-      },
-    );
+void _confirmMultiDelete() {
+  if (selectedStudentIds.isEmpty) return;
+
+  // Find name if only one student selected
+  String getDeleteMessage() {
+    if (selectedStudentIds.length == 1) {
+      String? name;
+      for (var student in totalStudents) {
+        if (student.id == selectedStudentIds.first) {
+          final data = student.data() as Map<String, dynamic>? ?? {};
+          name = data['name'] ?? 'this student';
+          break;
+        }
+      }
+      return 'Are you sure you want to delete "$name"?';
+    } else {
+      return 'Are you sure you want to delete ${selectedStudentIds.length} selected students?';
+    }
   }
 
-  Future<void> _deleteStudent(String studentId) async {
-    try {
-      var studentRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(firestoreUserId)
-          .collection('classes')
-          .doc(widget.classId)
-          .collection('students')
-          .doc(studentId);
+  showDialog(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text("Delete Students"),
+        content: Text(getDeleteMessage()),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context); // Close the dialog first
+              await _deleteSelectedStudents(); // Then delete and refresh
+              await _fetchStudentsAndAttendance(selectedDate); // Refresh data
+            },
+            child: const Text("Delete"),
+          ),
+        ],
+      );
+    },
+  );
+}
 
-      await studentRef.delete();
+
+  Future<void> _deleteSelectedStudents() async {
+    try {
+      for (final id in selectedStudentIds) {
+        final ref = FirebaseFirestore.instance
+            .collection('users')
+            .doc(firestoreUserId)
+            .collection('classes')
+            .doc(widget.classId)
+            .collection('students')
+            .doc(id);
+        await ref.delete();
+      }
 
       setState(() {
-        totalStudents.removeWhere((student) => student.id == studentId);
-        presentStudents.removeWhere((student) => student.id == studentId);
-        absentStudents.removeWhere((student) => student.id == studentId);
+        totalStudents.removeWhere((s) => selectedStudentIds.contains(s.id));
+        presentStudents.removeWhere((s) => selectedStudentIds.contains(s.id));
+        absentStudents.removeWhere((s) => selectedStudentIds.contains(s.id));
+        selectedStudentIds.clear();
+        isSelectionMode = false;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Selected students deleted.")),
+      );
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Error deleting student: $e")));
+      ).showSnackBar(SnackBar(content: Text("Error deleting students: $e")));
     }
   }
 }

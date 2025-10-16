@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key});
@@ -19,6 +21,24 @@ class _MyHomePageState extends State<MyHomePage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  Future<void> _cacheClassData() async {
+    final userId = _auth.currentUser!.uid;
+    final snapshot =
+        await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('classes')
+            .get();
+
+    final prefs = await SharedPreferences.getInstance();
+    final Map<String, String> classMap = {
+      for (var doc in snapshot.docs)
+        doc.id: doc['className'] ?? 'Unnamed Class',
+    };
+
+    await prefs.setString('cached_classes', jsonEncode(classMap));
+  }
+
   Future<void> _deleteClass(String classId) async {
     try {
       await _firestore
@@ -27,6 +47,8 @@ class _MyHomePageState extends State<MyHomePage> {
           .collection('classes')
           .doc(classId)
           .delete();
+
+      await _cacheClassData(); // refresh cache
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -51,107 +73,113 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _renameClass(String classId, String oldClassName) async {
-  final TextEditingController controller = TextEditingController(text: oldClassName);
-  String? errorText;
+    final TextEditingController controller = TextEditingController(
+      text: oldClassName,
+    );
+    String? errorText;
 
-  await showDialog(
-    context: context,
-    barrierDismissible: false, // prevent closing dialog by tapping outside
-    builder: (context) {
-      return StatefulBuilder(
-        builder: (context, setState) {
-          return AlertDialog(
-            title: const Text('Rename Class'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: controller,
-                  decoration: InputDecoration(
-                    hintText: 'Enter new class name',
-                    errorText: errorText,
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Rename Class'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: 'Enter new class name',
+                      errorText: errorText,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                child: const Text('Cancel'),
-                onPressed: () => Navigator.pop(context),
+                ],
               ),
-              TextButton(
-                child: const Text('Rename'),
-                onPressed: () async {
-                  final newName = controller.text.trim();
-                  if (newName.isEmpty) {
-                    setState(() {
-                      errorText = 'Class name cannot be empty';
-                    });
-                    return;
-                  }
-                  if (newName == oldClassName) {
-                    Navigator.pop(context);
-                    return;
-                  }
-
-                  try {
-                    final userId = _auth.currentUser!.uid;
-
-                    final duplicateQuery = await _firestore
-                        .collection('users')
-                        .doc(userId)
-                        .collection('classes')
-                        .where('className', isEqualTo: newName)
-                        .get();
-
-                    final isDuplicate = duplicateQuery.docs.any((doc) => doc.id != classId);
-
-                    if (isDuplicate) {
+              actions: [
+                TextButton(
+                  child: const Text('Cancel'),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                TextButton(
+                  child: const Text('Rename'),
+                  onPressed: () async {
+                    final newName = controller.text.trim();
+                    if (newName.isEmpty) {
                       setState(() {
-                        errorText = 'A class with that name already exists. Please choose another.';
+                        errorText = 'Class name cannot be empty';
                       });
                       return;
                     }
-
-                    await _firestore
-                        .collection('users')
-                        .doc(userId)
-                        .collection('classes')
-                        .doc(classId)
-                        .update({'className': newName});
-
-                    if (mounted) {
+                    if (newName == oldClassName) {
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Class renamed successfully!'),
-                          backgroundColor: Colors.green,
-                          duration: Duration(seconds: 3),
-                        ),
-                      );
+                      return;
                     }
-                  } catch (e) {
-                    if (mounted) {
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Error renaming class: $e'),
-                          backgroundColor: Colors.red,
-                          duration: Duration(seconds: 3),
-                        ),
-                      );
-                    }
-                  }
-                },
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
-}
 
+                    try {
+                      final userId = _auth.currentUser!.uid;
+
+                      final duplicateQuery =
+                          await _firestore
+                              .collection('users')
+                              .doc(userId)
+                              .collection('classes')
+                              .where('className', isEqualTo: newName)
+                              .get();
+
+                      final isDuplicate = duplicateQuery.docs.any(
+                        (doc) => doc.id != classId,
+                      );
+
+                      if (isDuplicate) {
+                        setState(() {
+                          errorText = 'A class with that name already exists.';
+                        });
+                        return;
+                      }
+
+                      await _firestore
+                          .collection('users')
+                          .doc(userId)
+                          .collection('classes')
+                          .doc(classId)
+                          .update({'className': newName});
+
+                      await _cacheClassData(); // refresh cache
+
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Class renamed successfully!'),
+                            backgroundColor: Colors.green,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Error renaming class: $e'),
+                            backgroundColor: Colors.red,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 
   Widget _buildActionButton({
     required IconData icon,
@@ -161,19 +189,23 @@ class _MyHomePageState extends State<MyHomePage> {
     double fontSize = 18,
   }) {
     final themeNotifier = Provider.of<ThemeNotifier>(context);
-    final buttonTextColor = themeNotifier.isDarkMode ? Colors.white : Colors.black;
-    final buttonIconColor = themeNotifier.isDarkMode ? Colors.white : Colors.black;
+    final buttonTextColor =
+        themeNotifier.isDarkMode ? Colors.white : Colors.black;
+    final buttonIconColor =
+        themeNotifier.isDarkMode ? Colors.white : Colors.black;
 
     return SizedBox(
       width: 320,
       height: height,
       child: ElevatedButton.icon(
         icon: Icon(icon, color: buttonIconColor),
-        label: Text(label, style: TextStyle(fontSize: fontSize, color: buttonTextColor)),
+        label: Text(
+          label,
+          style: TextStyle(fontSize: fontSize, color: buttonTextColor),
+        ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: themeNotifier.isDarkMode
-                ? Colors.blue[900]
-                : Colors.blue,
+          backgroundColor:
+              themeNotifier.isDarkMode ? Colors.blue[900] : Colors.blue,
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(15),
@@ -198,21 +230,29 @@ class _MyHomePageState extends State<MyHomePage> {
         elevation: 5,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+          contentPadding: const EdgeInsets.symmetric(
+            vertical: 12,
+            horizontal: 18,
+          ),
           title: Text(
             'Class $className',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textColor),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
           ),
           trailing: const Icon(Icons.arrow_forward_ios, color: Colors.blueGrey),
           onTap: () {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => StudentListScreen(
-                  classId: classDoc.id,
-                  className: className,
-                  userId: _auth.currentUser!.uid,
-                ),
+                builder:
+                    (context) => StudentListScreen(
+                      classId: classDoc.id,
+                      className: className,
+                      userId: _auth.currentUser!.uid,
+                    ),
               ),
             );
           },
@@ -255,20 +295,29 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _cacheClassData();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final themeNotifier = Provider.of<ThemeNotifier>(context);
     final textColor = themeNotifier.isDarkMode ? Colors.white : Colors.black;
-    final iconColor = themeNotifier.isDarkMode ? Colors.white70 : Colors.black87;
+    final iconColor =
+        themeNotifier.isDarkMode ? Colors.white70 : Colors.black87;
 
     final userId = _auth.currentUser!.uid;
 
     return Scaffold(
       backgroundColor: themeNotifier.isDarkMode ? Colors.black : Colors.white,
       appBar: AppBar(
-       backgroundColor: themeNotifier.isDarkMode
-                ? Colors.blue.shade900
-                : Colors.blue,
-        title: Text("Attendance App", style: TextStyle(fontWeight: FontWeight.bold, color: textColor)),
+        backgroundColor:
+            themeNotifier.isDarkMode ? Colors.blue.shade900 : Colors.blue,
+        title: Text(
+          "Attendance App",
+          style: TextStyle(fontWeight: FontWeight.bold, color: textColor),
+        ),
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
@@ -282,10 +331,13 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
           IconButton(
-            icon: Icon(Icons.settings,color: iconColor,),
+            icon: Icon(Icons.settings, color: iconColor),
             tooltip: "Settings",
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
             },
           ),
         ],
@@ -301,7 +353,10 @@ class _MyHomePageState extends State<MyHomePage> {
                 height: 100,
                 fontSize: 20,
                 onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => ScanScreen()));
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ScanScreen()),
+                  );
                 },
               ),
               const SizedBox(height: 20),
@@ -312,7 +367,10 @@ class _MyHomePageState extends State<MyHomePage> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => AddNewStudentScreen(firestoreUserId: _auth.currentUser!.uid),
+                      builder:
+                          (_) => AddNewStudentScreen(
+                            firestoreUserId: _auth.currentUser!.uid,
+                          ),
                     ),
                   );
                 },
@@ -320,7 +378,12 @@ class _MyHomePageState extends State<MyHomePage> {
               const SizedBox(height: 20),
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore.collection('users').doc(userId).collection('classes').snapshots(),
+                  stream:
+                      _firestore
+                          .collection('users')
+                          .doc(userId)
+                          .collection('classes')
+                          .snapshots(),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
@@ -331,7 +394,10 @@ class _MyHomePageState extends State<MyHomePage> {
                         child: Text(
                           'No classes available',
                           style: TextStyle(
-                            color: themeNotifier.isDarkMode ? Colors.white70 : Colors.black54,
+                            color:
+                                themeNotifier.isDarkMode
+                                    ? Colors.white70
+                                    : Colors.black54,
                             fontSize: 16,
                           ),
                         ),
@@ -339,7 +405,8 @@ class _MyHomePageState extends State<MyHomePage> {
                     }
 
                     return ListView(
-                      children: snapshot.data!.docs.map(_buildClassCard).toList(),
+                      children:
+                          snapshot.data!.docs.map(_buildClassCard).toList(),
                     );
                   },
                 ),

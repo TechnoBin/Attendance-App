@@ -1,4 +1,3 @@
-// All your existing imports remain the same
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +9,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -26,7 +27,8 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   bool showNameOverlay = false;
   bool isTorchOn = false;
   Set<String> scannedStudentIds = {};
-  final Map<String, Set<String>> _attendanceCache = {};
+  Map<String, Set<String>> _attendanceCache = {};
+  bool isSaving = false;
 
   late MobileScannerController _scannerController;
   late AnimationController _overlayController;
@@ -68,6 +70,28 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+
+
+Future<void> saveAttendanceCache() async {
+  final prefs = await SharedPreferences.getInstance();
+  // convert Set<String> to List<String> before encoding
+  final encoded = _attendanceCache.map((key, value) =>
+    MapEntry(key, value.toList()));
+  prefs.setString('attendance_cache', jsonEncode(encoded));
+}
+
+Future<void> loadAttendanceCache() async {
+  final prefs = await SharedPreferences.getInstance();
+  final jsonString = prefs.getString('attendance_cache');
+  if (jsonString != null) {
+    final Map<String, dynamic> decoded = jsonDecode(jsonString);
+    _attendanceCache = decoded.map((key, value) =>
+      MapEntry(key, Set<String>.from(value)));
+  } else {
+    _attendanceCache = {};
+  }
+}
+
   Future<void> _playSound(String fileName) async {
     await _audioPlayer.play(AssetSource(fileName));
   }
@@ -86,32 +110,24 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
         String studentId = qrParts[3];
         String classId = qrParts[2];
 
-        if (_attendanceCache[classId]?.contains(studentId) ?? false) {
+        bool classExists = await _checkClassExists(classId);
+        if (!classExists) {
           await _showOverlay(
-            Colors.orange.withOpacity(0.6),
-            message: "Student already marked present! ⚠️",
-            isError: false,
+            Colors.red.withOpacity(0.6),
+            message: "Class does not exist ❌",
+            isError: true,
           );
         } else {
-          bool classExists = await _checkClassExists(classId);
-          if (!classExists) {
-            await _showOverlay(
-              Colors.red.withOpacity(0.6),
-              message: "Class does not exist ❌",
-              isError: true,
-            );
+          bool markedLocally = _markAttendanceLocally(studentId, classId);
+          if (markedLocally) {
+            _onScanSuccess(studentName, studentId);
+            await _showOverlay(Colors.green.withOpacity(0.6));
           } else {
-            bool attendanceMarked = await _markAttendance(studentId, classId);
-            if (attendanceMarked) {
-              _onScanSuccess(studentName, studentId);
-              await _showOverlay(Colors.green.withOpacity(0.6));
-            } else {
-              await _showOverlay(
-                Colors.orange.withOpacity(0.6),
-                message: "Student already marked present! ⚠️",
-                isError: false,
-              );
-            }
+            await _showOverlay(
+              Colors.orange.withOpacity(0.6),
+              message: "Student already marked present! ⚠️",
+              isError: false,
+            );
           }
         }
       } else {
@@ -154,14 +170,10 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     });
 
     await _overlayController.forward();
-
-    await Future.delayed(const Duration(seconds: 1));
-
+    await Future.delayed(const Duration(milliseconds: 500));
     await _overlayController.reverse();
-
     _clearFreezeFrame();
   }
-
 
   Future<void> _captureFreezeFrame() async {
     try {
@@ -194,39 +206,88 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     }
   }
 
-  Future<bool> _markAttendance(String studentId, String classId) async {
+  // Change _markAttendance to only update local cache, no firestore write here
+  bool _markAttendanceLocally(String studentId, String classId) {
+  if (!_attendanceCache.containsKey(classId)) {
+    _attendanceCache[classId] = <String>{};
+  }
+  if (_attendanceCache[classId]!.contains(studentId)) {
+    return false; // already present
+  }
+  _attendanceCache[classId]!.add(studentId);
+  saveAttendanceCache(); // save after update
+  return true;
+}
+
+  // New method: batch write all cached attendance to firestore
+  Future<bool> _batchWriteAttendance() async {
+  setState(() {
+    isSaving = true;
+  });
+
+  try {
+    final batch = FirebaseFirestore.instance.batch();
     String formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    DocumentReference attendanceRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(firestoreUserId)
-        .collection('classes')
-        .doc(classId)
-        .collection('attendance')
-        .doc(formattedDate);
 
-    try {
-      // Load once into local cache
-      if (!_attendanceCache.containsKey(classId)) {
-        DocumentSnapshot snapshot = await attendanceRef.get();
-        List<String> present =
-            snapshot.exists ? List<String>.from(snapshot['present'] ?? []) : [];
-        _attendanceCache[classId] = present.toSet();
+    for (var classId in _attendanceCache.keys) {
+      final studentSet = _attendanceCache[classId]!;
+
+      final attendanceRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(firestoreUserId)
+          .collection('classes')
+          .doc(classId)
+          .collection('attendance')
+          .doc(formattedDate);
+
+      final existingDoc = await attendanceRef.get();
+      List<dynamic> existingPresent = [];
+
+      if (existingDoc.exists) {
+        existingPresent = (existingDoc.data()?['present'] ?? []) as List<dynamic>;
       }
 
-      if (_attendanceCache[classId]!.contains(studentId)) {
-        return false;
-      }
+      // Merge existing + current
+      final mergedSet = {...existingPresent.map((e) => e.toString()), ...studentSet};
 
-      _attendanceCache[classId]!.add(studentId);
-
-      await attendanceRef.set({
-        'present': _attendanceCache[classId]!.toList(),
+      batch.set(attendanceRef, {
+        'present': mergedSet.toList(),
       }, SetOptions(merge: true));
-
-      return true;
-    } catch (_) {
-      return false;
     }
+
+    await batch.commit();
+
+    setState(() {
+      isSaving = false;
+    });
+    return true;
+  } catch (e) {
+    setState(() {
+      isSaving = false;
+    });
+    debugPrint("Batch write failed: $e");
+    return false;
+  }
+}
+
+
+  // Override back button (or screen pop) to auto save pending attendance
+  Future<bool> _onWillPop() async {
+    if (_attendanceCache.isNotEmpty) {
+      bool success = await _batchWriteAttendance();
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Failed to save attendance before exit. Please try again.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return false; // Prevent exit to retry save
+      }
+    }
+    return true; // Allow exit
   }
 
   Future<void> _onScanSuccess(String studentName, String studentId) async {
@@ -249,12 +310,11 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     }
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    // ignore: use_build_context_synchronously
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text("Attendance Marked for: $studentName ✅"),
         backgroundColor: Colors.green,
-        duration: Duration(seconds: 1),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -285,18 +345,20 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       scannedStudentName = "";
       showNameOverlay = false;
     });
+
     if (feedbackNotifier.soundEnabled) {
       _playSound('error.mp3');
     }
     if (feedbackNotifier.vibrationEnabled) {
       Vibration.vibrate(duration: 100);
     }
+
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.red,
-        duration: Duration(seconds: 1),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -309,27 +371,108 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          RepaintBoundary(
-            key: _cameraKey,
-            child: MobileScanner(
-              controller: _scannerController,
-              onDetect: (capture) {
-                if (capture.barcodes.isNotEmpty) {
-                  String qrData = capture.barcodes.first.rawValue ?? "";
-                  _onQrCodeScanned(qrData);
-                }
-              },
+    return WillPopScope(
+      onWillPop: _onWillPop, // intercept back press to save
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            RepaintBoundary(
+              key: _cameraKey,
+              child: MobileScanner(
+                controller: _scannerController,
+                onDetect: (capture) {
+                  if (capture.barcodes.isNotEmpty) {
+                    String qrData = capture.barcodes.first.rawValue ?? "";
+                    _onQrCodeScanned(qrData);
+                  }
+                },
+              ),
             ),
-          ),
-          _buildFreezeFrame(),
-          _buildScannerOverlay(),
-          _buildScanFeedbackOverlay(),
-          _buildTopBar(),
-        ],
+            _buildFreezeFrame(),
+            _buildScannerOverlay(),
+            _buildScanFeedbackOverlay(),
+            _buildTopBar(),
+            // Positioned below scan box
+            Positioned(
+              bottom: 150, // adjust as needed
+              left: 0,
+              right: 0,
+              child: Center(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.tealAccent.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    textStyle: const TextStyle(fontSize: 16),
+                  ),
+                  onPressed:
+                      isSaving
+                          ? null
+                          : () async {
+                            if (_attendanceCache.isEmpty) {
+                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('No attendance to save.'),
+                                  backgroundColor: Colors.orange,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                              return;
+                            }
+
+                            bool success = await _batchWriteAttendance();
+                            if (success) {
+                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Attendance saved successfully!',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                              _attendanceCache.clear();
+
+                              // ✅ Pop screen after short delay (to let snackbar show)
+                              await Future.delayed(
+                                const Duration(milliseconds: 300),
+                              );
+                              if (context.mounted) Navigator.of(context).pop();
+                            } else {
+                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Failed to save attendance.'),
+                                  backgroundColor: Colors.red,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                          },
+                  child: const Text('Done'),
+                ),
+              ),
+            ),
+
+            if (isSaving)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const CircularProgressIndicator(color: Colors.white),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -344,8 +487,9 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
         children: [
           IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () {
-              Navigator.of(context).pop(); // Go back
+            onPressed: () async {
+              bool canPop = await _onWillPop();
+              if (canPop) Navigator.of(context).pop();
             },
           ),
           const Text(
@@ -491,8 +635,9 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildScanFeedbackOverlay() {
-    if (!showNameOverlay || scannedStudentName.isEmpty)
+    if (!showNameOverlay || scannedStudentName.isEmpty) {
       return const SizedBox.shrink();
+    }
 
     return Positioned(
       top: 130,

@@ -77,7 +77,7 @@ class _AddNewStudentScreenState extends State<AddNewStudentScreen> {
     });
   }
 
-  // TODO: Update _submitStudent to handle all entries at once (not included here for brevity)
+  // submit multipel students at once
   Future<void> _submitAllStudents() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -360,8 +360,8 @@ class _AddNewStudentScreenState extends State<AddNewStudentScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor:
                             themeNotifier.isDarkMode
-                                ? Colors.blue.shade600
-                                : Colors.blueAccent,
+                                ? const Color.fromARGB(255, 4, 158, 145)
+                                : const Color.fromARGB(255, 76, 168, 175),
                         padding: const EdgeInsets.symmetric(
                           vertical: 16,
                           horizontal: 24,

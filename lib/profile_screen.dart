@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'settings_screen.dart';
 import 'package:attendance_app_2/theme_notifier.dart';
-import 'package:intl_phone_field/intl_phone_field.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
